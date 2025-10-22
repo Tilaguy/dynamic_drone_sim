@@ -6,204 +6,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.widgets import Slider
 
-try:
-    import cupy as cp
-except Exception:
-    cp = None
-
-G = 9.81
-
-# ------------------------ Motor Dynamics (2D, bi-rotor) ------------------------
-class MotorDynamics2D:
-    """
-    2D bi-rotor motor dynamics + mixer (hover linearized).
-    Inputs (Dw mode):     (Dω_F, Dω_θ)
-    Inputs (forces mode): (ΔF, Δτ)
-    Outputs: ω_i, T_i, M_i  (i=1,2)
-    """
-
-    def __init__(self,
-                 L=0.25,                      # [m] arm length (±L on x_B)
-                 kf_in_rpm=6.11e-8,           # [N/(rpm)^2]
-                 km_in_rpm=1.5e-9,            # [N*m/(rpm)^2]
-                 motor_gain=20.0,             # [1/s] first-order motor model
-                 max_omega_rpm=7800.0,        # [rpm]
-                 use_gpu=False):
-        self.xp = (cp if (use_gpu and cp is not None) else np)
-
-        # Unit conversion: rpm -> rad/s (gains for ω^2)
-        conv = (30.0 / math.pi) ** 2
-        self.kf = kf_in_rpm * conv
-        self.km = km_in_rpm * conv
-
-        self.L = float(L)
-        self.motor_gain = float(motor_gain)
-        self.omega_max = (max_omega_rpm * 2.0 * math.pi) / 60.0  # [rad/s]
-
-        # States
-        self.omega = self.xp.zeros(2, dtype=float)  # [rad/s]
-        self.omega_h = 0.0  # hover baseline [rad/s], set after mass is known
-
-        # 2x2 mixer for desired motor speeds from (ω_h + Dω_F, Dω_θ)
-        # [ω1_des, ω2_des]^T = B @ [ω_h + Dω_F, Dω_θ]^T
-        self.B = self.xp.array([[1.0, -1.0],
-                                [1.0,  1.0]], dtype=float)
-
-    def set_hover_from_mass(self, mass: float):
-        """Compute hover speed from mass: mg = 2*kf*ω_h^2  ->  ω_h = sqrt(mg/(2*kf))."""
-        self.omega_h = math.sqrt(max(mass * G / (2.0 * self.kf), 0.0))
-        return self.omega_h
-
-    # --- mixing helpers ---
-    def _mix_from_Dw(self, Domega_F: float, Domega_theta: float):
-        v = self.xp.array([self.omega_h + Domega_F, Domega_theta], dtype=float)
-        return self.B @ v  # ω_des (2,)
-
-    def _mix_from_forces(self, dF: float, dtau: float):
-        # From linearization in 2D:
-        # ΔF   = 4*kf*ω_h * Dω_F     -> Dω_F   = ΔF / (4*kf*ω_h)
-        # Δτ   = 4*L*kf*ω_h * Dω_θ   -> Dω_θ   = Δτ / (4*L*kf*ω_h)
-        denomF = 4.0 * self.kf * max(self.omega_h, 1e-9)
-        denomT = 4.0 * self.L * self.kf * max(self.omega_h, 1e-9)
-        Domega_F    = dF   / denomF
-        Domega_theta= dtau / denomT
-        return self._mix_from_Dw(Domega_F, Domega_theta)
-
-    def update(self, dt, *, Dw=None, forces=None):
-        """
-        Update motor states.
-        Either:
-          Dw=(Dω_F, Dω_θ)         -- linearized channel inputs, OR
-          forces=(ΔF, Δτ)         -- physical deviations
-        """
-        if Dw is not None:
-            Domega_F, Domega_theta = Dw
-            omega_des = self._mix_from_Dw(Domega_F, Domega_theta)
-        elif forces is not None:
-            dF, dtau = forces
-            omega_des = self._mix_from_forces(dF, dtau)
-        else:
-            raise ValueError("Provide either Dw=(Dω_F, Dω_θ) or forces=(ΔF, Δτ).")
-
-        # First-order motor dynamics
-        self.omega += self.motor_gain * (omega_des - self.omega) * dt
-        self.omega = self.xp.clip(self.omega, 0.0, self.omega_max)
-
-        # Individual thrusts / drag torques
-        T_i = self.kf * (self.omega ** 2)   # [N]
-        M_i = self.km * (self.omega ** 2)   # [N*m]
-        return self.omega.copy(), T_i, M_i
-
-
-# --------------------------- Rigid Body (2D) ---------------------------
-class RigidBody2D:
-    """
-    2D rigid body with one rotational DOF (θ about z) and planar translation (x,y).
-    Conventions:
-      - Body thrust acts along +y_B (so F_b = [0, ΣT_i]).
-      - θ is CCW, R(θ) maps body->world.
-    """
-
-    def __init__(self, mass, L=0.25, Izz=5e-3, use_gpu=False,
-                 x0=0.0, y0=0.0, theta0=0.0, vx0=0.0, vy0=0.0, omega0=0.0):
-        self.xp = (cp if (use_gpu and cp is not None) else np)
-        self.m = float(mass)
-        self.L = float(L)
-        self.I = float(Izz)
-        # States (scalars)
-        self.x = float(x0)
-        self.y = float(y0)
-        self.theta = float(theta0)     # [rad]
-        self.vx = float(vx0)
-        self.vy = float(vy0)
-        self.omega = float(omega0)     # [rad/s]
-
-        # Diagnostics
-        self.lin_acc = np.zeros(2, dtype=float)
-        self.ang_acc = 0.0
-
-    @staticmethod
-    def _R(theta: float):
-        c, s = math.cos(theta), math.sin(theta)
-        return np.array([[c, -s],
-                         [s,  c]], dtype=float)
-
-    def state(self):
-        return {
-            "position": np.array([self.x, self.y], dtype=float),
-            "velocity": np.array([self.vx, self.vy], dtype=float),
-            "theta": self.theta,
-            "omega": self.omega,
-            "lin_acc": np.array(self.lin_acc, dtype=float),
-            "ang_acc": self.ang_acc
-        }
-
-    def update(self, dt, T_i):
-        T_i = np.asarray(T_i, dtype=float).reshape(2,)
-        # Body force (sum of rotor thrusts along +y_B)
-        F_b = np.array([0.0, float(T_i.sum())], dtype=float)
-        # Rotate to world and add gravity
-        F_w = self._R(self.theta) @ F_b + np.array([0.0, -self.m * G], dtype=float)
-        # Linear dynamics
-        ax, ay = F_w / self.m
-        self.lin_acc[:] = [ax, ay]
-        self.vx += ax * dt
-        self.vy += ay * dt
-        self.x  += self.vx * dt
-        self.y  += self.vy * dt
-
-        # Planar torque from thrust difference (motors at x = ±L)
-        tau = self.L * (T_i[1] - T_i[0])
-
-        # Angular dynamics (scalar inertia)
-        self.ang_acc = tau / self.I
-        self.omega += self.ang_acc * dt
-        self.theta += self.omega * dt
-
-        return self.state()
-
-
-# ----------------------- Attitude Control (2D) -----------------------
-class AttitudeControl2D:
-    """
-    2D attitude PD: outputs (Dω_F, Dω_θ) to feed MotorDynamics2D.
-    τ_des = Kp*e_θ - Kd*ω
-    Dω_θ  = τ_des / (4*L*kf*ω_h)
-    Dω_F  = provided by altitude loop (here PD on y)
-    """
-
-    def __init__(self, L, kf, omega_hover,
-                 kp_theta=4.0, kd_theta=2.0):
-        self.L   = float(L)
-        self.kf  = float(kf)           # N/(rad/s)^2
-        self.ω_h = float(omega_hover)  # rad/s
-        self.kpθ = float(kp_theta)
-        self.kdθ = float(kd_theta)
-        self._denom_θ = 4.0 * self.L * self.kf * max(self.ω_h, 1e-9)
-
-    def attitude_channels(self, θ_des, θ, ω):
-        e_θ = float(θ_des - θ)
-        τ_des = self.kpθ * e_θ - self.kdθ * float(ω)
-        Dω_θ = τ_des / self._denom_θ
-        return Dω_θ
-
-
-# ----------------------- Simple Altitude PD (2D) -----------------------
-class AltitudePD2D:
-    """Generates ΔF -> Dω_F = ΔF / (4 kf ω_h)."""
-    def __init__(self, kf, omega_hover, kp=8.0, kd=3.0):
-        self.kf = float(kf)
-        self.ω_h = float(omega_hover)
-        self.kp = float(kp)
-        self.kd = float(kd)
-        self._den = 4.0 * self.kf * max(self.ω_h, 1e-9)
-
-    def channel(self, y_des, y, vy):
-        e_y = float(y_des - y)
-        ΔF = self.kp * e_y - self.kd * float(vy)  # PD in world y
-        Dω_F = ΔF / self._den
-        return Dω_F
-
+from sim_2D.dynamic_models import RigidBody2D, MotorDynamics2D
+from sim_2D.control import PositionCascade2D, AttitudeControl2D
 
 # ============================= Simulation Setup =============================
 # Physical / model params
@@ -217,20 +21,26 @@ USE_GPU = False
 dt = 0.01
 sim_time = 10.0
 steps = int(sim_time / dt)
-sub_steps = 5
+sub_steps = 2
 sub_dt = dt / sub_steps
 
 # Desired references (sliders will override during run)
+desired_x   = 0.0
 desired_y   = 1.0
 desired_th  = 0.0  # rad
+θ_des_prev = 0.0
 
 # Instantiate blocks
 drone  = RigidBody2D(mass=mass, L=L, Izz=5e-3, use_gpu=USE_GPU)
 motors = MotorDynamics2D(L=L, kf_in_rpm=kf_rpm, km_in_rpm=km_rpm,
-                         motor_gain=20.0, max_omega_rpm=max_omega_rpm, use_gpu=USE_GPU)
+                         motor_gain=15.0, max_omega_rpm=max_omega_rpm, use_gpu=USE_GPU)
 ω_h = motors.set_hover_from_mass(mass)
-att  = AttitudeControl2D(L=L, kf=motors.kf, omega_hover=ω_h, kp_theta=6.0, kd_theta=2.0)
-alt  = AltitudePD2D(kf=motors.kf, omega_hover=ω_h, kp=10.0, kd=4.0)
+# ω_h = 0.0
+att = AttitudeControl2D(L=L, kf=motors.kf, omega_hover=ω_h, kp_theta=8.0, kd_theta=3.0)
+pos = PositionCascade2D(kp_x=3.0, ki_x=0.1, kd_x=2.8,
+                        kp_y=11.5, ki_y=0.0, kd_y=5.4,
+                        ax_limit=2.0, ay_limit=3.0,
+                        L=L, kf=motors.kf, omega_hover=ω_h)
 
 print("Hover ω [rad/s] =", ω_h)
 
@@ -301,10 +111,12 @@ line_theta.set_data(time_hist, y_blank.copy())
 line_theta_d.set_data(time_hist, y_blank.copy())
 
 # Sliders
-ax_sliders = plt.axes([0.25, 0.05, 0.65, 0.25])
+ax_sliders = plt.axes([0.25, 0.05, 0.65, 0.25]) # pyright: ignore[reportArgumentType]
 ax_sliders.axis("off")
-s_y  = Slider(plt.axes([0.30, 0.22, 0.55, 0.03]), "y_d [m]",   0.0, 1.8, valinit=desired_y)
-s_th = Slider(plt.axes([0.30, 0.17, 0.55, 0.03]), "θ_d [rad]", -0.5, 0.5, valinit=desired_th)
+s_x  = Slider(plt.axes([0.30, 0.22, 0.55, 0.03]), "x_d [m]",   -1.5, 1.5, valinit=desired_x) # pyright: ignore[reportArgumentType]
+s_y  = Slider(plt.axes([0.30, 0.17, 0.55, 0.03]), "y_d [m]",   0.0, 1.8, valinit=desired_y) # pyright: ignore[reportArgumentType]
+s_th = Slider(plt.axes([0.30, 0.12, 0.55, 0.03]), "θ_d [rad]", -0.5, 0.5, valinit=desired_th) # pyright: ignore[reportArgumentType]
+s_x.on_changed(lambda val: globals().__setitem__('desired_x', s_x.val))
 s_y.on_changed(lambda val: globals().__setitem__('desired_y', s_y.val))
 s_th.on_changed(lambda val: globals().__setitem__('desired_th', s_th.val))
 
@@ -339,24 +151,42 @@ def plots_update(state, W_i, Dω_F):
 last_time = time.perf_counter()
 
 def update(frame):
-    global last_time
-    # Current state
+    global last_time, θ_des_prev
+
+    # Estado actual
     state = drone.state()
+    x,  y  = state["position"]
+    vx, vy = state["velocity"]
+    θ,  ω  = state["theta"], state["omega"]
 
-    # Channels from controllers
-    Dω_F = alt.channel(desired_y, state["position"][1], state["velocity"][1])
-    Dω_θ = att.attitude_channels(desired_th, state["theta"], state["omega"])
+    ax_ref, ay_ref, θ_des_raw, Dω_F = pos.step(xd=desired_x, x=x, vx=vx,
+                                               yd=desired_y, y=y, vy=vy,
+                                               m=mass, dt=dt)
 
-    # Substeps for numerical stability
+    max_dtheta = 2.0  # [rad/s] velocidad máx. de referencia
+    dθ_cmd = np.clip(θ_des_raw - θ_des_prev, -max_dtheta*dt, max_dtheta*dt)
+    theta_des = np.clip(θ_des_prev + dθ_cmd, -0.5, 0.5)
+    θ_des_prev = float(theta_des)
+
+    # Lazo de actitud -> canal diferencial
+    Dω_θ = att.attitude_channels(theta_des, θ, ω)
+
+    # Saturaciones de canales (protege ω_des)
+    Dω_F = np.clip(Dω_F, -0.5*ω_h, 0.5*ω_h)   # p.ej. ±50% de ω_h
+    Dω_θ = np.clip(Dω_θ, -0.5*ω_h, 0.5*ω_h)
+
+    # Subpasos para estabilidad numérica
     for _ in range(sub_steps):
         W_i, T_i, M_i = motors.update(sub_dt, Dw=(Dω_F, Dω_θ))
         state = drone.update(sub_dt, T_i)
 
-    # Update plots occasionally
+    # Plots
     if frame % 1 == 0:
         plots_update(state, W_i, Dω_F)
+        # (opcional) refleja la ref. usada en el gráfico de θ_d:
+        theta_d_hist[(write_idx-1) % history_len] = theta_des
 
-    # Real-time pacing (optional)
+    # Pacing (opcional)
     elapsed = time.perf_counter() - last_time
     last_time = time.perf_counter()
     sleep_time = dt - elapsed

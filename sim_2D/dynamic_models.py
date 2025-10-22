@@ -8,11 +8,12 @@ except Exception:
 
 G = 9.81
 
+# ------------------------ Motor Dynamics (2D, bi-rotor) ------------------------
 class MotorDynamics2D:
     """
     2D bi-rotor motor dynamics + mixer (hover linearized).
-    Inputs (mode='Dw'):     (Dω_F, Dω_θ)
-    Inputs (mode='forces'): (ΔF, Δτ)
+    Inputs (Dw mode):     (Dω_F, Dω_θ)
+    Inputs (forces mode): (ΔF, Δτ)
     Outputs: ω_i, T_i, M_i  (i=1,2)
     """
 
@@ -25,20 +26,20 @@ class MotorDynamics2D:
                  use_gpu=False):
         self.xp = (cp if (use_gpu and cp is not None) else np)
 
-        # Unit conversion: rpm -> rad/s (squared gains)
+        # Unit conversion: rpm -> rad/s (gains for ω^2)
         conv = (30.0 / math.pi) ** 2
         self.kf = kf_in_rpm * conv
         self.km = km_in_rpm * conv
 
-        self.L = L
-        self.motor_gain = motor_gain
+        self.L = float(L)
+        self.motor_gain = float(motor_gain)
         self.omega_max = (max_omega_rpm * 2.0 * math.pi) / 60.0  # [rad/s]
 
         # States
         self.omega = self.xp.zeros(2, dtype=float)  # [rad/s]
         self.omega_h = 0.0  # hover baseline [rad/s], set after mass is known
 
-        # 2x2 mixer for desired **motor speeds** from (ω_h + Dω_F, Dω_θ)
+        # 2x2 mixer for desired motor speeds from (ω_h + Dω_F, Dω_θ)
         # [ω1_des, ω2_des]^T = B @ [ω_h + Dω_F, Dω_θ]^T
         self.B = self.xp.array([[1.0, -1.0],
                                 [1.0,  1.0]], dtype=float)
@@ -89,6 +90,7 @@ class MotorDynamics2D:
         return self.omega.copy(), T_i, M_i
 
 
+# --------------------------- Rigid Body (2D) ---------------------------
 class RigidBody2D:
     """
     2D rigid body with one rotational DOF (θ about z) and planar translation (x,y).
@@ -97,13 +99,13 @@ class RigidBody2D:
       - θ is CCW, R(θ) maps body->world.
     """
 
-    def __init__(self, mass, Izz=5e-3, use_gpu=False, L=0.25,
+    def __init__(self, mass, L=0.25, Izz=5e-3, use_gpu=False,
                  x0=0.0, y0=0.0, theta0=0.0, vx0=0.0, vy0=0.0, omega0=0.0):
         self.xp = (cp if (use_gpu and cp is not None) else np)
         self.m = float(mass)
-        self.I = float(Izz)
         self.L = float(L)
-        # States (scalars/vectors)
+        self.I = float(Izz)
+        # States (scalars)
         self.x = float(x0)
         self.y = float(y0)
         self.theta = float(theta0)     # [rad]
@@ -112,7 +114,7 @@ class RigidBody2D:
         self.omega = float(omega0)     # [rad/s]
 
         # Diagnostics
-        self.lin_acc = self.xp.zeros(2, dtype=float)
+        self.lin_acc = np.zeros(2, dtype=float)
         self.ang_acc = 0.0
 
     @staticmethod
@@ -123,8 +125,8 @@ class RigidBody2D:
 
     def state(self):
         return {
-            "pos": np.array([self.x, self.y], dtype=float),
-            "vel": np.array([self.vx, self.vy], dtype=float),
+            "position": np.array([self.x, self.y], dtype=float),
+            "velocity": np.array([self.vx, self.vy], dtype=float),
             "theta": self.theta,
             "omega": self.omega,
             "lin_acc": np.array(self.lin_acc, dtype=float),
@@ -144,19 +146,18 @@ class RigidBody2D:
         self.vy += ay * dt
         self.x  += self.vx * dt
         self.y  += self.vy * dt
+        if self.y < 0.0:
+            self.y = 0.0
+            self.vy = 0.0
+            self.lin_acc[:] = [ax, 0]
 
-        # Planar torque (motors at x = ±L; pass T_i in same order as MotorDynamics2D)
-        # Here we don't need L again if already used to compute τ outside; but for clarity:
-        # τ = L*(T2 - T1). If you prefer, compute τ externally and pass it instead.
-        # For now, just illustrative; you can remove if you prefer external τ.
-        # (Keep consistent with your MotorDynamics2D L if you reuse it here.)
-        # We'll assume L known to the caller or compute τ outside and set `tau` here.
-        # Example with L=0.25:
+        # Planar torque from thrust difference (motors at x = ±L)
         tau = self.L * (T_i[1] - T_i[0])
 
-        # Angular dynamics (no gyroscopic term in 2D with scalar inertia)
+        # Angular dynamics (scalar inertia)
         self.ang_acc = tau / self.I
         self.omega += self.ang_acc * dt
         self.theta += self.omega * dt
 
         return self.state()
+
