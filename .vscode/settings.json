@@ -1,0 +1,15 @@
+{
+  "python.analysis.extraPaths": [
+    "./sim_2D_ND1L",
+    "./sim_2D",
+    "./sim_3D",
+    "./sim_2D_load"
+  ],
+  "python.autoComplete.extraPaths": [
+    "./sim_2D_ND1L",
+    "./sim_2D",
+    "./sim_3D",
+    "./sim_2D_load"
+  ],
+  "python.analysis.typeCheckingMode": "basic"
+}

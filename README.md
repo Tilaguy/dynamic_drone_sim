@@ -1028,3 +1028,32 @@ $$
 T = m \left(d\theta^2 + \ddot{x}\sin\theta + (g - \ddot{y})\cos\theta \right)
 \end{equation}
 $$
+
+```
+Dynamic_drone_symulation
+├─ main_2D_sim.py
+├─ sim_3D
+│  ├─ dynamic_models.py
+│  ├─ control.py
+│  ├─ enviroment.py
+│  └─ trajectory.py
+├─ sim_2D
+│  ├─ dynamic_models.py
+│  └─ control.py
+├─ LICENSE
+├─ README.md
+├─ sim_2D_load
+│  └─ dynamic_models.py
+├─ main_simple_2D_load_sim.py
+├─ figs
+│  ├─ image 1.png
+│  ├─ image 2.png
+│  ├─ image 3.png
+│  └─ image.png
+└─ sim_2D_ND1L
+   ├─ main.py
+   ├─ control.py
+   ├─ dynamic_system.py
+   └─ __init__.py
+
+```
