@@ -201,7 +201,8 @@ class SystemDynamic:
 
   def step(self,
            F:list[float],
-           τ:list[float]
+           τ:list[float],
+           W_load:float= 0.0
            ):
     '''
     Docstring for step
@@ -209,8 +210,10 @@ class SystemDynamic:
     :param self: Update the dynamic of the sistem in one iteration
     :param F: Thrust force vector, one value for each robot
     :type F: list[float]
-    :param τ: Torque vecto, one value for each robot
+    :param τ: Torque vector, one value for each robot
     :type τ: list[float]
+    :param W_load: x-axis force pertubation for load
+    :type W_load: float
     '''
 
     # Param validation
@@ -220,6 +223,7 @@ class SystemDynamic:
       raise IndexError(f"The lenght of <τ> not match with the number of robots to the system (num_robots = {self.N-1}).")
 
     self.Q.fill(0)
+    self.Q[0, 0] = W_load
     for i in range(self.N-1):
       Fi = F[i]
       τi = τ[i]
