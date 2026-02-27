@@ -15,7 +15,7 @@ Ts = 0.02
 sub_steps = 40
 dt = Ts / sub_steps
 
-num_robots = 6
+num_robots = 3
 load_mass = 0.020    # 20 grams
 d = 0.046            # 46 mm (arm length)
 max_rpm = 22000.0
@@ -26,7 +26,7 @@ motor_gain = 18.0
 robot_masses = np.ones(num_robots) * 0.027
 robot_inertia = [1.4e-5] * num_robots
 cables_list = [1.2] * num_robots
-cables_list[3:5] = [1., 0.8]
+# cables_list[3:5] = [1., 0.8]
 init_load_pos = [0.0, 1.0]
 
 # ================= PHYSICAL INITIALIZATION =================
@@ -213,4 +213,34 @@ def update(frame):
     load_d['y_ref'].append(ty)
     load_d['y_act'].append(sys.q[1,0])
 
-    return
+    # Redraw Telemetry
+    l_rpm1.set_data(t_d, rpm_d[0]); l_rpm2.set_data(t_d, rpm_d[1])
+    l_x_act.set_data(t_d, pos_d[0]); l_z_act.set_data(t_d, pos_d[1])
+    l_phi_ref.set_data(t_d, phi_d[0]); l_phi_act.set_data(t_d, phi_d[1])
+    l_load_x_ref.set_data(t_d, load_d['x_ref']); l_load_x_act.set_data(t_d, load_d['x_act'])
+    l_load_y_ref.set_data(t_d, load_d['y_ref']); l_load_y_act.set_data(t_d, load_d['y_act'])
+    ax_rpm.set_xlim(max(0, time_elapsed - 5), time_elapsed + 0.1)
+
+    # Visual Simulation (Drones as lines)
+    q = sys.q
+    dx, dy = [], []
+    visual_arm = d * 2
+    for i in range(1, sys.N):
+        idx, _ = sys.get_agent_indices(i)
+        xc, yc, phic = q[idx:idx+3, 0] 
+        x1, y1 = xc - visual_arm * np.cos(phic), yc - visual_arm * np.sin(phic)
+        x2, y2 = xc + visual_arm * np.cos(phic), yc + visual_arm * np.sin(phic)
+        dx.extend([x1, x2, None]); dy.extend([y1, y2, None])
+
+    line_drones.set_data(dx, dy)
+    cx, cy = [], []
+    for (p, c) in sys.edges:
+        pi, _ = sys.get_agent_indices(p); ci, _ = sys.get_agent_indices(c)
+        cx.extend([q[pi,0], q[ci,0], None]); cy.extend([q[pi+1,0], q[ci+1,0], None])
+    line_cables.set_data(cx, cy)
+    pt_load.set_data([q[0, 0]], [q[1, 0]])
+
+    return line_cables, line_drones, pt_load, l_rpm1, l_x_act, l_load_x_act
+
+ani = FuncAnimation(fig, update, frames=None, interval=Ts*1000, blit=False)
+plt.show()

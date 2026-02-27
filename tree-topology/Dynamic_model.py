@@ -251,6 +251,7 @@ class SystemDynamic:
 
     # print(f"shape A:{self.A.shape}")
     # print(f"shape J:{self.J.shape}")
+    # print(self.J)
     # print(f"shape γ:{self.γ.shape}")
     # print(f"shape aux_zero:{aux_zero.shape}")
     # print(f"shape aux0:{aux0.shape}")
