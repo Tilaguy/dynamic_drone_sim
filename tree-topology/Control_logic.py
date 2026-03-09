@@ -117,6 +117,7 @@ class PositionCascade2D:
         """
         # Horizontal PID -> desired horizontal acceleration
         ex   = float(xd - x)
+        # print(f"xd = {xd}, x = {x}, ex = {ex}")
         evx  = float(0.0 - vx)
         a_x_ref = self.pid_x.step(ex, evx, dt)
 

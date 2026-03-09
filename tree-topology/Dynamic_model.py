@@ -28,7 +28,6 @@ class MotorDynamics2D:
         self.L = float(L)
         self.motor_gain = float(motor_gain)
         self.omega_max = (max_omega_rpm * 2.0 * math.pi) / 60.0  # [rad/s]
-        print(f"Ω max per motor: {self.omega_max} [rad/s]")
 
         # States
         self.omega = np.zeros(2, dtype=float)  # [rad/s]
@@ -89,7 +88,7 @@ class SystemDynamic:
   """
   Docstring for SystemDynamic
   Inputs:  F, τ are (N x 1) vectors
-  Outputs: q (3N-1 x 1), λ (N-1 x 1)
+  Outputs: q (3N+2 x 1), λ (N x 1)
   """
   def __init__(self,
                num_robots:int,
@@ -110,20 +109,20 @@ class SystemDynamic:
     :param Ts: Sample time of the discret system implementation
     :type Ts: float
     """
-    self.N = num_robots + 1
+    self.N = num_robots
+    self.num_agents = num_robots + 1
     self.Ts = Ts
 
     # Param validation
-    if self.N < 2:
+    if self.num_agents < 2:
       raise ValueError("The <num_robots> must be at least 1, to be able to simulate the system.")
-    elif len(agent_masses) != self.N:
-      raise IndexError(f"The lenght of <agent_masses> not match with the number of agets to the system (N = {self.N}).")
+    elif len(agent_masses) != self.num_agents:
+      raise IndexError(f"The lenght of <agent_masses> not match with the number of agets to the system {self.num_agents}.")
     elif len(robot_inertia) != num_robots:
-      raise IndexError(f"The lenght of <robot_inertia> not match with the number of robots to the system (num_robots = {num_robots}).")
+      raise IndexError(f"The lenght of <robot_inertia> not match with the number of robots to the system (N = {self.N}).")
 
     # System model construction
-    self.DOF = 3*self.N - 1
-    self.M = self.N - 1
+    self.DOF = 3*self.N + 2
 
     self.q = np.zeros((self.DOF, 1))
     self.d_q = np.zeros((self.DOF, 1))
@@ -132,9 +131,9 @@ class SystemDynamic:
     self.A = np.zeros((self.DOF, self.DOF))
     self.Q = np.zeros((self.DOF, 1))
     self.G = np.zeros((self.DOF, 1))
-    self.λ = np.zeros((self.M, 1))
-    self.J = np.zeros((self.M, self.DOF))
-    self.γ = np.zeros((self.M, 1))
+    self.λ = np.zeros((self.N, 1))
+    self.J = np.zeros((self.N, self.DOF))
+    self.gama = np.zeros((self.N, 1))
 
     self.A[0, 0] = agent_masses[0]
     self.A[1, 1] = agent_masses[0]
@@ -148,9 +147,9 @@ class SystemDynamic:
     # Generate the graph connections
     self.edges = [] # (parent, child)
     for i in range(1, (self.N // 2) + 1):
-      if 2 * i <= self.N:
+      if 2 * i <= self.N + 1:
         self.edges.append((i - 1, 2 * i - 1))
-      if 2 * i + 1 <= self.N:
+      if 2 * i + 1 <= self.N + 1:
         self.edges.append((i - 1, 2 * i))
 
   def get_states(self):
@@ -177,7 +176,7 @@ class SystemDynamic:
     self.J.fill(0)
     d_J = np.zeros_like(self.J)
 
-    for k in range(self.M):
+    for k in range(self.N):
       idx_p, idx_c = self.edges[k]
 
       start_p, dim_p = self.get_agent_indices(idx_p)
@@ -190,14 +189,14 @@ class SystemDynamic:
       self.J[k, start_c : start_c + 2] = 2 * diff.T
       self.J[k, start_p : start_p + 2] = -2 * diff.T
 
-      # update γ
+      # update gama
       vel_p = self.d_q[start_p : start_p + 2]
       vel_c = self.d_q[start_c : start_c + 2]
       diff_v = vel_c - vel_p
       d_J[k, start_c : start_c + 2] = 2 * diff_v.T
       d_J[k, start_p : start_p + 2] = -2 * diff_v.T
 
-    self.γ = d_J @ self.d_q
+    self.gama = d_J @ self.d_q
 
   def step(self,
            F:list[float],
@@ -217,14 +216,14 @@ class SystemDynamic:
     '''
 
     # Param validation
-    if len(F) != self.N-1:
-      raise IndexError(f"The lenght of <F> not match with the number of robots to the system (num_robots = {self.N-1}).")
-    elif len(τ) != self.N-1:
-      raise IndexError(f"The lenght of <τ> not match with the number of robots to the system (num_robots = {self.N-1}).")
+    if len(F) != self.N:
+      raise IndexError(f"The lenght of <F> not match with the number of robots to the system (num_robots = {self.N}).")
+    elif len(τ) != self.N:
+      raise IndexError(f"The lenght of <τ> not match with the number of robots to the system (num_robots = {self.N}).")
 
     self.Q.fill(0)
     self.Q[0, 0] = W_load
-    for i in range(self.N-1):
+    for i in range(self.N):
       Fi = F[i]
       τi = τ[i]
 
@@ -238,11 +237,11 @@ class SystemDynamic:
     self.update_jacobian()
 
     # Solve the liear system to predict dd_q and λ
-    aux_zero = np.zeros((self.M,self.M))
+    aux_zero = np.zeros((self.N,self.N))
     aux0 = np.hstack([self.A, -self.J.T])
     aux1 = np.hstack([self.J, aux_zero])
     aux_A = np.vstack([aux0, aux1])
-    aux_B = np.vstack([self.Q - self.G, -self.γ])
+    aux_B = np.vstack([self.Q - self.G, -self.gama])
 
     q_ext = np.linalg.solve(aux_A, aux_B)
 
@@ -252,7 +251,7 @@ class SystemDynamic:
     # print(f"shape A:{self.A.shape}")
     # print(f"shape J:{self.J.shape}")
     # print(self.J)
-    # print(f"shape γ:{self.γ.shape}")
+    # print(f"shape gama:{self.gama.shape}")
     # print(f"shape aux_zero:{aux_zero.shape}")
     # print(f"shape aux0:{aux0.shape}")
     # print(f"shape aux1:{aux1.shape}")
@@ -261,6 +260,7 @@ class SystemDynamic:
     # print(f"shape q_ext:{q_ext.shape}")
     # print(f"shape dd_q:{self.dd_q.shape}")
     # print(f"shape λ:{self.λ.shape}")
+    # print(self.λ[:])
     return self.update_states(), self.λ
 
 if __name__ == "__main__":
