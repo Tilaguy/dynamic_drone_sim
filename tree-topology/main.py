@@ -1,43 +1,52 @@
+from traceback import print_tb
+
 import numpy as np
 import math
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from matplotlib.widgets import Slider
 from matplotlib.gridspec import GridSpec
+from matplotlib.collections import LineCollection
+import matplotlib.colors as mcolors
 from collections import deque
 
-# --- YOUR CLASSES (Make sure they are in the same folder) ---
 from Dynamic_model import SystemDynamic, MotorDynamics2D
 from Control_logic import PositionCascade2D, AttitudeControl2D
-from graphic_env import generate_initial_position, generate_position_ref
+from Geometrical_functios import FormationManager
 
-# ================= CRAZYFLIE 2.1 CONFIGURATION =================
 Ts = 0.02
 sub_steps = 40
 dt = Ts / sub_steps
 
-num_robots = 4
-load_mass = 0.020    # 20 grams
-d = 0.046            # 46 mm (arm length)
+num_robots = 6
+load_mass = 0.027
+
+# ================= CRAZYFLIE 2.1 CONFIGURATION =================
+d = 0.046
 max_rpm = 22000.0
 kf_rpm = 1.28e-8
 km_rpm = 2.0e-10
 motor_gain = 18.0
+robot_mass = 0.027
+robot_inertia = 1.4e-5
 
-robot_masses = np.full(num_robots, 0.027)
-robot_inertia = [1.4e-5] * num_robots
-cables_list = [1.2] * num_robots
-s = [1.5] * int(math.log2(num_robots + 1))
-# s = [d * 1.5] * int(math.log2(num_robots + 1))
+robot_masses = np.full(num_robots, robot_mass)
+robot_inertia = [robot_inertia] * num_robots
 init_load_pos = [0.0, 1.0]
+init_cable_len = 1.2
+s = 7 * d
+print(f"safe distance: {s} m")
 
 # ================= PHYSICAL INITIALIZATION =================
 all_masses = np.insert(robot_masses, 0, load_mass)
 sys = SystemDynamic(num_robots=num_robots, agent_masses=list(all_masses), robot_inertia=robot_inertia)
-print(f"Edges set: {sys.edges}")
 sys.Ts = dt
-positions_ref = generate_initial_position(N=num_robots, cables_len=cables_list, load_position=init_load_pos, edges=sys.edges)
-# positions_ref = generate_position_ref(positions_ref, s=s)
+print(f"Edges set: {sys.edges}")
+
+pos_manager = FormationManager(N=num_robots, edges=sys.edges)
+cables_list = pos_manager.exponential_cables(base_length=init_cable_len, alpha=0.9)
+print(f"Cables length: {cables_list}")
+positions_ref = pos_manager.generate_initial_position(load_position=init_load_pos)
 
 for i, pos in enumerate(positions_ref):
   idx, _ = sys.get_agent_indices(i)
@@ -70,7 +79,7 @@ max_w_h = max_w_h * 60 / (2*np.pi)
 print(f"Maximum ω_h = {max_w_h} [rad/s]")
 
 # ================= DASHBOARD UI =================
-fig = plt.figure(figsize=(8, 5))
+fig = plt.figure(figsize=(10, 6))
 gs = GridSpec(4, 2, width_ratios=[1, 1.2])
 
 # 1. Simulation View (Left)
@@ -80,8 +89,15 @@ ax_sim.set_ylim(0, 5)
 ax_sim.set_aspect('equal')
 ax_sim.grid(True, alpha=0.3)
 
-line_cables, = ax_sim.plot([], [], 'k-', lw=1, alpha=0.5)
-line_drones, = ax_sim.plot([], [], 'b-', lw=3, label='Drones')
+text_telemetry = ax_sim.text(0.05, 0.95, '', transform=ax_sim.transAxes,
+                             ha='left', va='top', fontsize=10, family='monospace',
+                             bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.85, edgecolor='gray'))
+
+cmap_cables = mcolors.LinearSegmentedColormap.from_list('tension', ['black', 'red'])
+cable_collection = LineCollection([], cmap=cmap_cables, lw=1, alpha=0.8)
+ax_sim.add_collection(cable_collection)
+
+line_drones, = ax_sim.plot([], [], 'b-', lw=2, label='Drones')
 pt_load, = ax_sim.plot([], [], 'ro', markersize=10, zorder=5)
 
 # --- SLIDERS ---
@@ -97,14 +113,15 @@ s_robot_idx = Slider(ax_si, 'Show Robot', 1, num_robots, valinit=0, valstep=1)
 ax_sp = plt.axes([0.1, 0.02, 0.3, 0.02], facecolor='mistyrose') # type: ignore
 s_perturb = Slider(ax_sp, 'PERTURB X (N)', -1.5, 1.5, valinit=0.0)
 
-# 2. Telemetry (Right)
+# Telemetry (Right)
+max_omega = (max_rpm * 2.0 * math.pi) / 60.0
 ax_rpm = fig.add_subplot(gs[0, 1])
 l_rpm1, = ax_rpm.plot([], [], 'r', label='M1')
 l_rpm2, = ax_rpm.plot([], [], 'b', label='M2')
 l_rpm_ref, = ax_rpm.plot([], [], '--k', label='Hover ref', alpha=0.4)
 ax_rpm.set_ylabel('RPM')
 ax_rpm.legend(loc='upper right', fontsize='x-small')
-ax_rpm.set_ylim(max_w_h * 0.8, max_w_h * 1.2)
+ax_rpm.set_ylim(max_w_h * 0.8, max(max_omega * 1.2, max_w_h * 1.2))
 
 ax_pos = fig.add_subplot(gs[1, 1], sharex=ax_rpm)
 l_x_act, = ax_pos.plot([], [], 'b', label='Robot X')
@@ -156,7 +173,6 @@ parent_of  = {child: parent for parent, child in sys.edges}
 
 def update(frame):
   global time_elapsed, positions_ref
-  positions_ref = generate_position_ref(positions_ref, s=s)
 
   tx, ty = s_ref_x.val, s_ref_y.val
   ridx = int(s_robot_idx.val)
@@ -164,31 +180,30 @@ def update(frame):
 
   temp_data = {}
 
-  for _ in range(sub_steps):
+  T_final = np.zeros(num_robots)
+  L_list = np.zeros(num_robots)
 
+  for step_idx in range(sub_steps):
     force_list, torque_list = [], []
-    L_list = np.zeros(num_robots)
 
     for i in range(num_robots):
-
       idx, _ = sys.get_agent_indices(i + 1)
-
       x, y, phi = sys.q[idx:idx+3, 0]
       vx, vz, dphi = sys.d_q[idx:idx+3, 0]
 
       rx = positions_ref[i+1][0] + tx
       ry = positions_ref[i+1][1] + (ty - init_load_pos[1])
 
-      for _ in range(sub_steps):
-        _, _, p_des, Dw_F = pos_ctrls[i].step(
-          xd=rx, x=x, vx=vx,
-          yd=ry, y=y, vy=vz,
-          m=robot_masses[i],
-          dt=dt/sub_steps)
+      # for _ in range(sub_steps):
+      _, _, p_des, Dw_F = pos_ctrls[i].step(
+        xd=rx, x=x, vx=vx,
+        yd=ry, y=y, vy=vz,
+        m=robot_masses[i],
+        dt=dt)
 
-        p_des = np.clip(p_des, -0.6, 0.6)
+      p_des = np.clip(p_des, -0.6, 0.6)
 
-        Dw_phi = att_ctrls[i].attitude_channels(p_des, phi, dphi)
+      Dw_phi = att_ctrls[i].attitude_channels(p_des, phi, dphi)
 
       w_real, F, _ = motors[i].update(
         dt,
@@ -198,26 +213,38 @@ def update(frame):
       force_list.append(float(np.sum(F)))
       torque_list.append(d * (F[1] - F[0]))
 
-      i_rho = parent_of[i + 1]
-      idx_rho, _ = sys.get_agent_indices(i_rho)
-      x_rho, y_rho = sys.q[idx_rho:idx_rho+2, 0]
-      L_list[i] = np.sqrt((x - x_rho) ** 2 + (y - y_rho) ** 2)
-      if i == (ridx - 1):
-        temp_data['rpm'] = w_real * 60 / (2*np.pi)
-        temp_data['rpm_h'] = motors[i].omega_h * 60 / (2*np.pi)
-        temp_data['pos'] = [x, y]
-        temp_data["pos_ref"] = [rx, ry]
-        temp_data['phi'] = [p_des, phi]
+      if step_idx == sub_steps - 1:
+        i_rho = parent_of[i + 1]
+        idx_rho, _ = sys.get_agent_indices(i_rho)
+        x_rho, y_rho = sys.q[idx_rho:idx_rho+2, 0]
+        L_list[i] = np.sqrt((x - x_rho) ** 2 + (y - y_rho) ** 2)
 
-    _, lambdas = sys.step(force_list, torque_list, f_perturb)
-    T = 2 * lambdas.flatten() * np.array(cables_list)
-    print(f"\r|T| = {np.abs(T)} [N], L = {L_list} [m]", end="", flush=True)
+        if i == (ridx - 1):
+          temp_data['rpm'] = w_real * 60 / (2*np.pi)
+          temp_data['rpm_h'] = motors[i].omega_h * 60 / (2*np.pi)
+          temp_data['pos'] = [x, y]
+          temp_data["pos_ref"] = [rx, ry]
+          temp_data['phi'] = [p_des, phi]
+
+    _, lambdas = sys.step(F=force_list, τ=torque_list, W_load=f_perturb, safe_dist=s)
+
+    if step_idx == sub_steps - 1:
+      T_final = 2 * lambdas.flatten() * np.array(cables_list)
 
     time_elapsed += dt
 
-    # SLIDER RESET: makes it behave like an impulse
-    if f_perturb != 0:
-      s_perturb.set_val(0.0)
+  # print(f"\r|T| = {np.abs(T_final)} [N], L = {L_list} [m]", end="", flush=True)
+  t_val = np.abs(T_final[ridx - 1])
+  l_val = L_list[ridx - 1]
+  stats_text = (f"► ROBOT {ridx} STATS\n"
+                f"Tension : {t_val:.3f} [N]\n"
+                f"Length  : {l_val:.3f} [m]")
+
+  text_telemetry.set_text(stats_text)
+
+  # SLIDER RESET: makes it behave like an impulse
+  if f_perturb != 0:
+    s_perturb.set_val(0.0)
 
   # Update history buffers
   t_d.append(time_elapsed)
@@ -258,14 +285,24 @@ def update(frame):
     dx.extend([x1, x2, None]); dy.extend([y1, y2, None])
 
   line_drones.set_data(dx, dy)
-  cx, cy = [], []
+  segments = []
   for (p, c) in sys.edges:
-    pi, _ = sys.get_agent_indices(p); ci, _ = sys.get_agent_indices(c)
-    cx.extend([q[pi,0], q[ci,0], None]); cy.extend([q[pi+1,0], q[ci+1,0], None])
-  line_cables.set_data(cx, cy)
+    pi, _ = sys.get_agent_indices(p)
+    ci, _ = sys.get_agent_indices(c)
+    segments.append([(q[pi,0], q[pi+1,0]), (q[ci,0], q[ci+1,0])])
+
+  cable_collection.set_segments(segments)
+
+  T_abs = np.abs(T_final)
+  t_min = T_abs.min()
+  t_max = max(T_abs.max(), 1e-3)
+
+  cable_collection.set_clim(t_min, t_max)
+  cable_collection.set_array(T_abs)
+
   pt_load.set_data([q[0, 0]], [q[1, 0]])
 
-  return line_cables, line_drones, pt_load, l_rpm1, l_x_act, l_load_x_act
+  return cable_collection, line_drones, pt_load, l_rpm1, l_x_act, l_load_x_act, text_telemetry
 
 ani = FuncAnimation(fig, update, frames=None, interval=Ts*1000, blit=False, cache_frame_data=False)
 plt.show()
