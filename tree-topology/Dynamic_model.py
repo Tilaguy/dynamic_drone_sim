@@ -238,14 +238,14 @@ class SystemDynamic:
           # Apply equal and opposite forces acting on j
           self.Q[start_j : start_j + 2] -= force_mag * n
 
-  def step(self, F:list[float], τ:list[float], W_load:float= 0.0, safe_dist=0.6):
+  def step(self, F:list[float], τ:list[float], f_ext_load:float= 0.0, safe_dist=0.6):
     """
     Updates the system dynamics for one iteration.
 
     Args:
         F (list[float]): Thrust force vector, one value for each robot.
         τ (list[float]): Torque vector, one value for each robot.
-        W_load (float): x-axis force perturbation for the load.
+        f_ext_load (float): x-axis force perturbation for the load.
 
     Returns:
         tuple: (Current generalized states, Lagrange multipliers)
@@ -256,7 +256,7 @@ class SystemDynamic:
       raise IndexError("Length of F and τ must match num_robots.")
 
     self.Q.fill(0)
-    self.Q[0, 0] = W_load
+    self.Q[0, 0] = f_ext_load
 
     for i in range(self.N):
       Fi = F[i]

@@ -1,5 +1,3 @@
-from traceback import print_tb
-
 import numpy as np
 import math
 import matplotlib.pyplot as plt
@@ -44,7 +42,7 @@ sys.Ts = dt
 print(f"Edges set: {sys.edges}")
 
 pos_manager = FormationManager(N=num_robots, edges=sys.edges)
-cables_list = pos_manager.exponential_cables(base_length=init_cable_len, alpha=0.9)
+cables_list = pos_manager.exponential_cables(base_length=init_cable_len, alpha=0.9)[:num_robots]
 print(f"Cables length: {cables_list}")
 positions_ref = pos_manager.generate_initial_position(load_position=init_load_pos)
 
@@ -111,7 +109,7 @@ ax_si = plt.axes([0.1, 0.05, 0.3, 0.02]) # type: ignore
 s_robot_idx = Slider(ax_si, 'Show Robot', 1, num_robots, valinit=0, valstep=1)
 
 ax_sp = plt.axes([0.1, 0.02, 0.3, 0.02], facecolor='mistyrose') # type: ignore
-s_perturb = Slider(ax_sp, 'PERTURB X (N)', -1.5, 1.5, valinit=0.0)
+s_perturb = Slider(ax_sp, 'PERTURB X (N)', -5, 5, valinit=0.0)
 
 # Telemetry (Right)
 max_omega = (max_rpm * 2.0 * math.pi) / 60.0
@@ -226,7 +224,7 @@ def update(frame):
           temp_data["pos_ref"] = [rx, ry]
           temp_data['phi'] = [p_des, phi]
 
-    _, lambdas = sys.step(F=force_list, τ=torque_list, W_load=f_perturb, safe_dist=s)
+    _, lambdas = sys.step(F=force_list, τ=torque_list, f_ext_load=f_perturb, safe_dist=s)
 
     if step_idx == sub_steps - 1:
       T_final = 2 * lambdas.flatten() * np.array(cables_list)

@@ -42,7 +42,7 @@ class FormationManager:
 
         return int(math.log2(L / min_sep))
 
-    def generate_initial_position(self, load_position):
+    def generate_initial_position(self, load_position, base_sep=0.5):
         agent_pos = np.zeros((self.num_agents, 2))
         agent_pos[0] = load_position
 
@@ -50,8 +50,6 @@ class FormationManager:
         children = defaultdict(list)
         for p, c in self.edges:
             children[p].append(c)
-
-        base_sep = 0.5
 
         # ---------- compute subtree width ----------
         width = {}
