@@ -8,7 +8,7 @@ from matplotlib.collections import LineCollection
 import matplotlib.colors as mcolors
 from collections import deque
 
-from Dynamic_model import PulleyDynamic2D, PulleyDynamic_Lagrange2D, DroneDynamic2D, MotorDynamics2D
+from Dynamic_model import PulleyDynamic_Lagrange2D, DroneDynamic2D, MotorDynamics2D
 from Control_logic import PositionCascade2D, AttitudeControl2D
 from Geometrical_functios import FormationManager
 
@@ -29,14 +29,12 @@ robot_mass = 0.027
 robot_inertia = 1.4e-5
 
 robot_masses = np.full(num_robots, robot_mass)
-# robot_inertia = [robot_inertia] * num_robots
 init_load_pos = [0.0, 1.0]
 init_cable_len = 4
 # s = 7 * d
 # print(f"safe distance: {s} m")
 
 # ================= PHYSICAL INITIALIZATION =================
-# pulley = PulleyDynamic2D(mass=load_mass, pulley_pos=np.array(init_load_pos), cable_len=init_cable_len, Ts=dt, damping=0.025)
 pulley = PulleyDynamic_Lagrange2D(mass=load_mass, pulley_pos=np.array([0]), cable_len=init_cable_len, Ts=dt, damping=0.025)
 edges=[(0, 1), (0, 2)]
 print(f"Edges set: {edges}")
@@ -185,12 +183,6 @@ def update(frame):
 	f_dist = s_perturb.val  # Capture impulse value
 
 	temp_data = {}
-
-	# T_final = np.zeros(num_robots)
-	# L_list = np.zeros(num_robots)
-
-	# positions_ref = [positions_ref[0], t1, t2]
-	# _, x1, x2 = positions_ref
 	force_list, torque_list = [], []
 
 	for step_idx in range(sub_steps):
@@ -213,8 +205,6 @@ def update(frame):
 			Ft = float(np.sum(F))
 			τ = d * (F[1] - F[0])
 
-			# --- CRITICAL FIX: Convert Body Thrust to World Frame and Store it ---
-			# Do NOT add gravity here. The Pulley DAE adds gravity via the G matrix!
 			F_w = bases[i]._R(bases[i].q[2, 0]) @ np.array([[0.0], [Ft]])
 			bases[i].F_t = F_w
 			bases[i].τ = τ
@@ -222,14 +212,10 @@ def update(frame):
 			force_list.append(Ft)
 			torque_list.append(τ)
 
-			# NOTE: Notice we completely DELETED bases[i].step(...) here!
-
 		# 2. STEP THE ENTIRE COUPLED PHYSICS SYSTEM ONCE
 		pulley.step(base1=bases[0], base2=bases[1], F_ext=f_dist)
 
 		# 3. SYNCHRONIZE THE DRONES TO THE NEW PHYSICS STATES
-		# This pushes the integrated states from the central solver back into the drones
-		# so your controllers and visuals read the correct, constrained positions next frame.
 		for i in range(num_robots):
 			bases[i].q[:, 0] = pulley.q[3*i + 2: 3*i + 5, 0]
 			bases[i].dq[:, 0] = pulley.dq[3*i + 2: 3*i + 5, 0]
