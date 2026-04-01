@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.widgets import Slider
 
-from sim_2D_load.dynamic_models import RigidBody2D, MotorDynamics
-from sim_2D.control import PositionCascade2D, AttitudeControl2D
+from dynamic_models import RigidBody2D, MotorDynamics
+from control import PositionCascade2D, AttitudeControl2D
 
 # ============================= Simulation Setup =============================
 # Physical / model params
