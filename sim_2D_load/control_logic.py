@@ -28,33 +28,7 @@ class AttitudeControl2D:
         return Dω_θ
 
 
-# ----------------------- Simple Altitude PD (2D) -----------------------
-class AltitudePD2D:
-    """Generates ΔF -> Dω_F = ΔF / (4 kf ω_h)."""
-    def __init__(self, kf, omega_hover, kp=8.0, kd=3.0, ki=10.0):
-        self.kf = float(kf)
-        self.ω_h = float(omega_hover)
-        self.kp = float(kp)
-        self.kd = float(kd)
-        self.ki = float(ki)
-        self._den = 4.0 * self.kf * max(self.ω_h, 1e-9)
-
-        self.i = 0.0
-
-    def channelPD(self, y_des, y, vy):
-        e_y = float(y_des - y)
-        ΔF = self.kp * e_y - self.kd * float(vy)
-        Dω_F = ΔF / self._den
-        return Dω_F
-
-    def channelPID(self, y_des, y, vy, dt):
-        e_y = float(y_des - y)
-        self.i += e_y * dt
-        ΔF = self.kp * e_y - self.kd * float(vy) + self.ki *  self.i
-        Dω_F = ΔF / self._den
-        return Dω_F
-
-
+# ----------------------- Position Control PD (2D) -----------------------
 class PID:
     """
     PID with derivative-on-measurement, low-pass on D, and anti-windup by back-calculation.
@@ -155,8 +129,8 @@ class PositionCascade2D:
 
         # Allocation (exact, not small-angle)
         num_y = G + a_y_ref
-        theta_des = math.atan2(-a_x_ref, num_y)            # rad
-        T_cmd     = float(m) * math.hypot(a_x_ref, num_y) # N
+        theta_des = math.atan2(-a_x_ref, num_y)             # rad
+        T_cmd     = float(m) * math.hypot(a_x_ref, num_y)   # N
 
         # Convert thrust to collective channel around hover (ΔF = T_cmd - mg)
         ΔF   = T_cmd - float(m) * G
