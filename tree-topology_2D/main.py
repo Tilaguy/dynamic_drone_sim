@@ -16,8 +16,8 @@ Ts = 0.02
 sub_steps = 40
 dt = Ts / sub_steps
 
-num_robots = 6
-load_mass = 0.027
+num_robots = 4
+load_mass = 0.0127
 
 # ================= CRAZYFLIE 2.1 CONFIGURATION =================
 d = 0.046
@@ -193,15 +193,15 @@ def update(frame):
       ry = positions_ref[i+1][1] + (ty - init_load_pos[1])
 
       # for _ in range(sub_steps):
-      _, _, p_des, Dw_F = pos_ctrls[i].step(
+      _, _, phi_des, Dw_F = pos_ctrls[i].step(
         xd=rx, x=x, vx=vx,
         yd=ry, y=y, vy=vz,
         m=robot_masses[i],
         dt=dt)
 
-      p_des = np.clip(p_des, -0.6, 0.6)
+      phi_des = np.clip(phi_des, -0.6, 0.6)
 
-      Dw_phi = att_ctrls[i].attitude_channels(p_des, phi, dphi)
+      Dw_phi = att_ctrls[i].attitude_channels(phi_des, phi, dphi)
 
       w_real, F, _ = motors[i].update(
         dt,
@@ -222,7 +222,7 @@ def update(frame):
           temp_data['rpm_h'] = motors[i].omega_h * 60 / (2*np.pi)
           temp_data['pos'] = [x, y]
           temp_data["pos_ref"] = [rx, ry]
-          temp_data['phi'] = [p_des, phi]
+          temp_data['phi'] = [phi_des, phi]
 
     _, lambdas = sys.step(F=force_list, τ=torque_list, f_ext_load=f_perturb, safe_dist=s)
 

@@ -29,7 +29,7 @@ class AttitudeControl2D:
         Dω_θ = τ_des / self._denom_θ
         return Dω_θ
 
-
+# ----------------------- Position Control (2D) -----------------------
 class PID:
     """
     PID controller with derivative low-pass filter and back-calculation anti-windup.
@@ -86,7 +86,6 @@ class PID:
             self.i_term += (self.ki * e + self.kaw * (u - u_unsat)) * dt
 
         return u
-
 
 class PositionCascade2D:
     """
