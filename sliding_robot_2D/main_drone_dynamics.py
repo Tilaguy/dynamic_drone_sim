@@ -188,14 +188,14 @@ def update(frame):
 	for step_idx in range(sub_steps):
 	 	# 1. COMPUTE CONTROLS & FORCES FOR EACH DRONE
 		for i in range(num_robots):
-			_, _, p_des, Dw_F = pos_ctrls[i].step(
+			_, _, phi_des, Dw_F = pos_ctrls[i].step(
 				xd=p_ref[i, 0], x=bases[i].q[0, 0], vx=bases[i].dq[0, 0],
 				yd=p_ref[i, 1], y=bases[i].q[1, 0], vy=bases[i].dq[1, 0],
 				m=bases[i].m,
 				dt=dt)
 
-			p_des = np.clip(p_des, -0.6, 0.6)
-			Dw_phi = att_ctrls[i].attitude_channels(p_des, bases[i].q[2, 0], bases[i].dq[2, 0])
+			phi_des = np.clip(phi_des, -0.6, 0.6)
+			Dw_phi = att_ctrls[i].attitude_channels(phi_des, bases[i].q[2, 0], bases[i].dq[2, 0])
 
 			w_real, F, _ = motors[i].update(
 				dt,
@@ -228,7 +228,7 @@ def update(frame):
 					temp_data['rpm_h'] = motors[i].omega_h * 60 / (2*np.pi)
 					temp_data['pos'] = bases[i].q[:2, 0].copy()
 					temp_data["pos_ref"] = p_ref[i, :]
-					temp_data['phi'] = [p_des, bases[i].q[2, 0].copy()]
+					temp_data['phi'] = [phi_des, bases[i].q[2, 0].copy()]
 
 		time_elapsed += dt
 
